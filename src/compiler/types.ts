@@ -3674,8 +3674,6 @@ namespace ts {
         /* @internal */
         FreshLiteral            = 1 << 25,  // Fresh literal or unique type
         /* @internal */
-        UnionOfUnitTypes        = 1 << 26,  // Type is union of unit types
-        /* @internal */
         ContainsWideningType    = 1 << 27,  // Type is or contains undefined or null widening type
         /* @internal */
         ContainsObjectLiteral   = 1 << 28,  // Type is or contains object literal type
@@ -3718,8 +3716,6 @@ namespace ts {
         // This *should* be every type other than null, undefined, void, and never
         Narrowable = Any | Unknown | StructuredOrInstantiable | StringLike | NumberLike | BooleanLike | ESSymbol | UniqueESSymbol | NonPrimitive,
         NotUnionOrUnit = Any | Unknown | ESSymbol | Object | NonPrimitive,
-        /* @internal */
-        NotUnit = Any | String | Number | Boolean | Enum | ESSymbol | Void | Never | StructuredOrInstantiable,
         /* @internal */
         RequiresWidening = ContainsWideningType | ContainsObjectLiteral,
         /* @internal */

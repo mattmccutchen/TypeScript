@@ -8806,6 +8806,91 @@ namespace ts {
             }
         }
 
+        type LazyType = (aliasSymbol?: Symbol, aliasTypeArguments?: ReadonlyArray<Type>) => Type;
+
+        function distributeOneType(type: Type, f: (t: Type) => LazyType): LazyType {
+            if (type.flags & TypeFlags.Union) {
+                return (aliasSymbol, aliasTypeArguments) => getUnionType(
+                    map((<UnionType>type).types, (t) => f(t)()), UnionReduction.Literal, aliasSymbol, aliasTypeArguments);
+            }
+            else {
+                return f(type);
+            }
+        }
+        function distributeLastIfNeeded(middle: Type[], last: Type): LazyType {
+            return middle.length === 0 ? () => last : distributeOneType(last, t2 =>
+                (aliasSymbol, aliasTypeArguments) => getIntersectionType(middle.concat(t2), aliasSymbol, aliasTypeArguments));
+        }
+
+        function distributeIntersectionOfUnions(typeSet: Type[], aliasSymbol?: Symbol, aliasTypeArguments?: ReadonlyArray<Type>): Type {
+            const partialUnits = createMap<[Type, Type]>();
+            let lazyPartialRest: LazyType = () => unknownType;
+            let lastProcessedI = typeSet.length;
+            for (let i = typeSet.length - 1; i >= 0; i--) {
+                const type = typeSet[i];
+                let thisUnits: Type[], thisRest: Type;
+                if (type.flags & TypeFlags.Unit) {
+                    thisUnits = [type];
+                    thisRest = neverType;
+                }
+                else if (type.flags & TypeFlags.Union) {
+                    const unionType = <UnionType>type;
+                    thisUnits = filter(unionType.types, t => (t.flags & TypeFlags.Unit) !== 0);  // preserves order
+                    thisRest = thisUnits.length === 0 ? unionType : getUnionType(filter(unionType.types, t => (t.flags & TypeFlags.Unit) === 0));
+                }
+                else {
+                    continue;
+                }
+                const intermediates = typeSet.slice(i + 1, lastProcessedI);
+                const partialRest = lazyPartialRest();
+                const thisUnitsHad = new Array(thisUnits.length);
+                partialUnits.forEach(entry => {
+                    const j = binarySearch(thisUnits, entry[0], getTypeId, compareValues);
+                    if (j >= 0) {
+                        thisUnitsHad[j] = true;
+                        entry[1] = distributeLastIfNeeded(intermediates, entry[1])();
+                    }
+                    else {
+                        entry[1] = distributeOneType(thisRest, t1 => distributeOneType(entry[1], t2 =>
+                            () => getIntersectionType([t1].concat(intermediates, t2))))();
+                    }
+                });
+                for (let j = 0; j < thisUnits.length; j++) {
+                    if (!thisUnitsHad[j]) {
+                        partialUnits.set("" + thisUnits[j].id, [thisUnits[j],
+                            distributeLastIfNeeded(intermediates, partialRest)()]);
+                    }
+                }
+                lazyPartialRest = distributeOneType(thisRest, t1 => distributeOneType(partialRest, t2 =>
+                    (aliasSymbol, aliasTypeArguments) => getIntersectionType([t1].concat(intermediates, t2), aliasSymbol, aliasTypeArguments)));
+                lastProcessedI = i;
+            }
+            if (partialUnits.size === 0 && lastProcessedI === 0) {
+                return lazyPartialRest(aliasSymbol, aliasTypeArguments);
+            }
+            else {
+                // At this point, we are reasonably sure lazyPartialRest isn't the final result, so we
+                // can force it to check if it's `never` so that if partialUnits has only one entry, we
+                // can apply the alias information.
+                const rest = lazyPartialRest();
+                const intermediates = typeSet.slice(0, lastProcessedI);
+                const lazyFinalUnionMembers: LazyType[] = [];
+                if (rest !== neverType) {
+                    lazyFinalUnionMembers.push(distributeLastIfNeeded(intermediates, rest));
+                }
+                partialUnits.forEach((entry) => {
+                    lazyFinalUnionMembers.push(distributeOneType(entry[1], t2 =>
+                        (aliasSymbol, aliasTypeArguments) => getIntersectionType([entry[0]].concat(intermediates, t2), aliasSymbol, aliasTypeArguments)));
+                });
+                if (lazyFinalUnionMembers.length === 1) {
+                    return lazyFinalUnionMembers[0](aliasSymbol, aliasTypeArguments);
+                }
+                else {
+                    return getUnionType(map(lazyFinalUnionMembers, l => l()), UnionReduction.Literal, aliasSymbol, aliasTypeArguments);
+                }
+            }
+        }
+
         // We normalize combinations of intersection and union types based on the distributive property of the '&'
         // operator. Specifically, because X & (A | B) is equivalent to X & A | X & B, we can transform intersection
         // types with union type constituents into equivalent union types with intersection type constituents and
@@ -8843,44 +8928,7 @@ namespace ts {
                 return typeSet[0];
             }
             if (includes & TypeFlags.Union) {
-                // We are attempting to construct a type of the form X & (A | B) & Y. Transform this into a type of
-                // the form X & A & Y | X & B & Y and recursively reduce until no union type constituents remain.
-                const lastNonfinalUnionIndex = findLastIndex(typeSet, t => (t.flags & TypeFlags.Union) !== 0, typeSet.length - 2);
-                let partialIntersectionStartIndex: number, unionIndex: number;
-                if (lastNonfinalUnionIndex === -1) {
-                    // typeSet[typeSet.length - 1] must be the only union.  Distribute it and we're done.
-                    partialIntersectionStartIndex = 0;
-                    unionIndex = typeSet.length - 1;
-                }
-                else {
-                    // `keyof` a large union of types results in an intersection of unions containing many unit types (GH#24223).
-                    // To help avoid an exponential blowup, distribute the last union over the later constituents of the
-                    // intersection and simplify the resulting union before distributing earlier unions.  (Exception: don't
-                    // distribute a union that is the last constituent of the intersection over the zero remaining constituents
-                    // because that would have no effect.)
-                    partialIntersectionStartIndex = lastNonfinalUnionIndex;
-                    unionIndex = lastNonfinalUnionIndex;
-                }
-                const unionType = <UnionType>typeSet[unionIndex];
-                let relevantUnionMembers = unionType.types;
-                // As of 2018-07-19, discarding mismatching unit types here rather than letting it
-                // happen when we create the distributed union gives a 5x speedup on the test case
-                // for #23977.
-                if (includes & TypeFlags.Unit) {
-                    const unitTypeInIntersection = find(typeSet, t => (t.flags & TypeFlags.Unit) !== 0)!;
-                    relevantUnionMembers = filter(unionType.types, t => t === unitTypeInIntersection || (t.flags & TypeFlags.Unit) === 0);
-                }
-                const partialIntersectionMembers = typeSet.slice(partialIntersectionStartIndex);
-                const distributedMembers = map(relevantUnionMembers, t => getIntersectionType(replaceElement(partialIntersectionMembers, unionIndex - partialIntersectionStartIndex, t)));
-                if (partialIntersectionStartIndex === 0) {
-                    return getUnionType(distributedMembers, UnionReduction.Literal, aliasSymbol, aliasTypeArguments);
-                }
-                else {
-                    const distributedUnion = getUnionType(distributedMembers, UnionReduction.Literal);
-                    const newIntersectionMembers = typeSet.slice(0, partialIntersectionStartIndex + 1);
-                    newIntersectionMembers[partialIntersectionStartIndex] = distributedUnion;
-                    return getIntersectionType(newIntersectionMembers, aliasSymbol, aliasTypeArguments);
-                }
+                return distributeIntersectionOfUnions(typeSet, aliasSymbol, aliasTypeArguments);
             }
             const id = getTypeListId(typeSet);
             let type = intersectionTypes.get(id);

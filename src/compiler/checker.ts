@@ -17828,20 +17828,6 @@ namespace ts {
             return getNameFromJsxElementAttributesContainer(JsxNames.ElementChildrenAttributeNameContainer, jsxNamespace);
         }
 
-        function getApparentTypeOfJsxPropsType(propsType: Type | undefined): Type | undefined {
-            if (!propsType) {
-                return undefined;
-            }
-            if (propsType.flags & TypeFlags.Intersection) {
-                const propsApparentType: Type[] = [];
-                for (const t of (<UnionOrIntersectionType>propsType).types) {
-                    propsApparentType.push(getApparentType(t));
-                }
-                return getIntersectionType(propsApparentType);
-            }
-            return getApparentType(propsType);
-        }
-
         /**
          * Get JSX attributes type by trying to resolve openingLikeElement as a stateless function component.
          * Return only attributes type of successfully resolved call signature.
@@ -17862,7 +17848,6 @@ namespace ts {
                     if (callSignature !== unknownSignature) {
                         const callReturnType = callSignature && getReturnTypeOfSignature(callSignature);
                         let paramType = callReturnType && (callSignature!.parameters.length === 0 ? emptyObjectType : getTypeOfSymbol(callSignature!.parameters[0]));
-                        paramType = getApparentTypeOfJsxPropsType(paramType);
                         if (callReturnType && isTypeAssignableTo(callReturnType, jsxStatelessElementType)) {
                             // Intersect in JSX.IntrinsicAttributes if it exists
                             const intrinsicAttributes = getJsxType(JsxNames.IntrinsicAttributes, openingLikeElement);
@@ -17902,7 +17887,6 @@ namespace ts {
                         const callReturnType = getReturnTypeOfSignature(candidate);
                         // TODO: GH#18217: callReturnType should always be defined...
                         let paramType: Type | undefined = callReturnType && (candidate.parameters.length === 0 ? emptyObjectType : getTypeOfSymbol(candidate.parameters[0]));
-                        paramType = getApparentTypeOfJsxPropsType(paramType);
                         if (callReturnType && isTypeAssignableTo(callReturnType, jsxStatelessElementType)) {
                             let shouldBeCandidate = true;
                             for (const attribute of openingLikeElement.attributes.properties) {

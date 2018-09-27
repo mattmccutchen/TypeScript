@@ -1,0 +1,24 @@
+tests/cases/conformance/jsx/file.tsx(9,13): error TS2322: Type 'U' is not assignable to type 'IntrinsicAttributes & U'.
+  Type '{ x: string; }' is not assignable to type 'IntrinsicAttributes & U'.
+    Type '{ x: string; }' is not assignable to type 'U'.
+      Type 'U' is not assignable to type 'IntrinsicAttributes'.
+        Type '{ x: string; }' has no properties in common with type 'IntrinsicAttributes'.
+
+
+==== tests/cases/conformance/jsx/file.tsx (1 errors) ====
+    import React = require('react');
+    
+    declare function Component<T>(props: T) : JSX.Element;
+    const decorator = function <U>(props: U) {
+        return <Component {...props} />;
+    }
+    
+    const decorator1 = function <U extends {x: string}>(props: U) {
+        return <Component {...props} />;
+                ~~~~~~~~~
+!!! error TS2322: Type 'U' is not assignable to type 'IntrinsicAttributes & U'.
+!!! error TS2322:   Type '{ x: string; }' is not assignable to type 'IntrinsicAttributes & U'.
+!!! error TS2322:     Type '{ x: string; }' is not assignable to type 'U'.
+!!! error TS2322:       Type 'U' is not assignable to type 'IntrinsicAttributes'.
+!!! error TS2322:         Type '{ x: string; }' has no properties in common with type 'IntrinsicAttributes'.
+    }
